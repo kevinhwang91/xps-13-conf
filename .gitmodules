@@ -1,0 +1,3 @@
+[submodule "X11/gpu"]
+	path = X11/gpu
+	url = git@github.com:kevinhwang91/gpu-xserver-switch.git

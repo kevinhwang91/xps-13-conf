@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+if [[ ! -x $(command -v playerctl) ]]; then
+    exit 1
+fi
+
+DBUS_LOCK="interface='org.gnome.ScreenSaver',member='ActiveChanged'"
+LOCK_SIGNAL='true'
+dbus-monitor --session "type='signal',$DBUS_LOCK" |
+    (
+        while read -r line; do
+            if grep $LOCK_SIGNAL <<<$line 2>/dev/null; then
+                for player in $(playerctl --list-all); do
+                    if [[ $(playerctl --player=$player status) == Playing ]]; then
+                        playerctl --player=$player pause
+                    fi
+                done
+            fi
+        done
+    )

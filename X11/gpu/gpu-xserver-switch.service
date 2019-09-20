@@ -1,0 +1,9 @@
+[Unit]
+Description=Adaptive Xorg GPU switching at boot
+
+[Service]
+Type=oneshot
+ExecStart=#PREFIX#/bin/gxs boot #RETRY#
+
+[Install]
+WantedBy=graphical.target

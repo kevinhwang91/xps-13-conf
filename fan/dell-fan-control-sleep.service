@@ -1,0 +1,13 @@
+[Unit]
+Description=Enable BIOS control of fans at sleep.
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/dell-fan-control 0
+ExecStop=/usr/bin/dell-fan-control 1
+
+[Install]
+WantedBy=sleep.target

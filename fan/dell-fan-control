@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+if [ "$(whoami)" != root ]; then
+    echo 'You need to be root.'
+    exit
+fi
+
+if [[ ! -x "$(command -v dell-bios-fan-control)" ]]; then
+    echo 'dell-bios-fan-control is not found.'
+    exit
+fi
+
+if [[ ! -x "$(command -v i8kfan)" ]]; then
+    echo 'dell-bios-fan-control is not found.'
+    exit
+fi
+
+if (($1 == 1)); then
+    dell-bios-fan-control 0 >/dev/null
+    i8kfan 0 0 >/dev/null
+    echo 'User control fan is enabled.'
+else
+    dell-bios-fan-control 1 >/dev/null
+    echo 'User control fan is disabled.'
+fi

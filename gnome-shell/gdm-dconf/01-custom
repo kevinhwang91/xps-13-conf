@@ -1,0 +1,12 @@
+[org/gnome/desktop/interface]
+cursor-theme='Breeze'
+font-name='Hack Nerd Font 11'
+icon-theme='Papirus-Dark'
+monospace-font-name='Hack Nerd Font Mono 11'
+show-battery-percentage=true
+
+[org/gnome/desktop/peripherals/touchpad]
+natural-scroll=true
+speed=0.6
+tap-to-click=true
+two-finger-scrolling-enabled=true

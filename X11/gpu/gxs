@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+
+if (($(id -u) != 0)); then
+    echo 'You need to be root.'
+    exit 1
+fi
+
+XORG_CONF='/etc/X11/xorg.conf'
+IGPU_TEMPLATE='/etc/X11/xorg.conf.igpu'
+EGPU_TEMPLATE='/etc/X11/xorg.conf.egpu'
+EGPU_BUS_ID=$(awk '/BusID/{gsub(/(PCI:|")/,""); print $2}' <$EGPU_TEMPLATE)
+XORG_DRIVER=$(awk '/Driver/{gsub("\"",""); print $2}' <$EGPU_TEMPLATE)
+
+bus_id_hex2dec() {
+    hex_id=$1
+    segs=($(echo $hex_id | tr ':|\.' ' '))
+    dec_id=$(printf ':%d' "0x${segs[@]}")
+    echo ${dec_id:1}
+}
+
+detect_egpu_pluged() {
+    # lscpi may out error at boot stage.
+    lspci 2>/dev/null | awk '/VGA/{print $1}' | {
+        while read -r hex_id; do
+            dec_id=$(bus_id_hex2dec $hex_id)
+            if [[ $dec_id == "$EGPU_BUS_ID" ]]; then
+                echo 'true'
+            fi
+        done
+    }
+}
+
+install_property_nvidia_driver() {
+    modprobe nvidia
+    modprobe nvidia-modeset
+    modprobe nvidia-drm
+    modprobe nvidia-uvm
+}
+
+remove_property_nvidia_driver() {
+    modprobe -r nvidia-uvm
+    modprobe -r nvidia-drm
+    modprobe -r nvidia-modeset
+    modprobe -r nvidia
+}
+
+answer() {
+    read -r answer
+    case $answer in
+    [Yy]*)
+        echo 'true'
+        ;;
+    [Nn]*)
+        echo 'false'
+        ;;
+    *)
+        echo "Unknown answer: $answer."
+        exit 1
+        ;;
+    esac
+}
+
+do_detach() {
+    ln -sf $IGPU_TEMPLATE $XORG_CONF
+    (
+        trap '' HUP TERM
+        while [[ $(systemctl status display-manager | awk '/Active:/{print $2}') = active ]]; do
+            sleep 1
+        done
+        systemctl stop display-manager.service
+
+        segs_g=("$(echo ${EGPU_BUS_ID%.*} | tr ':' ' ')")
+
+        hex_id_g="$(printf %02x ${segs_g[0]}):$(printf %02x ${segs_g[1]})"
+        if [[ -n $hex_id_g ]]; then
+            for bus_remove_path in /sys/bus/pci/devices/0000:"$hex_id_g".*/remove; do
+                echo 1 >$bus_remove_path
+            done
+        fi
+
+        if [[ $XORG_DRIVER == nvidia ]]; then
+            sleep 1
+            remove_property_nvidia_driver
+        fi
+        systemctl start display-manager.service
+    ) &
+    systemctl stop display-manager.service
+    exit 0
+
+}
+
+do_reload() {
+    gpu=$1
+    (
+        trap '' HUP TERM
+        while [[ $(systemctl status display-manager | awk '/Active:/ {print $2}') = active ]]; do
+            sleep 1
+        done
+        if [[ $XORG_DRIVER = nvidia ]]; then
+            sleep 1
+            if [[ $gpu == egpu ]]; then
+                install_property_nvidia_driver
+            elif [[ $gpu == igpu ]]; then
+                remove_property_nvidia_driver
+            fi
+        fi
+        systemctl start display-manager.service
+    ) &
+    systemctl stop display-manager.service
+    exit 0
+}
+
+switch_gpu() {
+    gpu=$1
+    if [[ $gpu == egpu ]]; then
+        template=$EGPU_TEMPLATE
+    else
+        template=$IGPU_TEMPLATE
+    fi
+    if [[ $(readlink $XORG_CONF) == "$template" ]]; then
+        echo "You are already set up $gpu. Would you like to reload? (y/n)"
+    else
+        ln -sf $template $XORG_CONF
+        echo "You are now set up $gpu. Would you like to reload? (y/n)"
+    fi
+    if [[ $(answer) == true ]]; then
+        do_reload $gpu
+    else
+        exit 0
+    fi
+}
+
+do_boot() {
+    detect_count=$1
+    gpu='igpu'
+    ln -sf $IGPU_TEMPLATE $XORG_CONF
+    while ((detect_count > 0)); do
+        detect_count=$((detect_count - 1))
+        sleep 1
+        echo "Have ${detect_count}s left to detect egpu pluged."
+        if [[ -n $(detect_egpu_pluged) ]]; then
+            gpu='egpu'
+            if [[ $XORG_DRIVER == nvidia ]]; then
+                install_property_nvidia_driver
+            fi
+            break
+        fi
+    done
+    if [[ $gpu == egpu ]]; then
+        switch_gpu 'egpu' <<<'No'
+    else
+
+        switch_gpu 'igpu' <<<'No'
+    fi
+}
+
+do_setup() {
+    card_info=$1
+    hex_id=$(grep -E -o '[a-z0-9]+:[a-z0-9]+\.[a-z0-9]' <<<$card_info)
+    if [[ -z $hex_id ]]; then
+        echo 'Fail to parse the BusID, please check out the input number.'
+        exit 1
+    fi
+    dec_id=$(bus_id_hex2dec $hex_id)
+    if [[ $card_info =~ NVIDIA ]]; then
+        driver='nvidia'
+    elif [[ $card_info =~ AMD ]]; then
+        driver='amdgpu'
+    else
+        echo "Fail to find driver for the eGPU."
+        exit 1
+    fi
+    sed -E -i -e "s/\s+BusID\s+.*/\tBusID\t\t\"PCI:$dec_id\"/" \
+        -e "s/\s+Driver\s+.*/\tDriver\t\t\"$driver\"/" $EGPU_TEMPLATE
+    echo 'External GPU setup successfully!'
+    exit 0
+}
+
+show_help() {
+    echo 'Usage: gxs [cmd].'
+    echo 'egpu,e        Switch external GPU.'
+    echo 'igpu,i        Switch internal GPU.'
+    echo 'detach,d      Detach GPU enclosed.'
+}
+
+main() {
+    case $1 in
+    egpu | e)
+        switch_gpu 'egpu'
+        ;;
+    igpu | i)
+        switch_gpu 'igpu'
+        ;;
+    boot)
+        if [[ $2 =~ ^[0-9]+$ ]]; then
+            detect_count=$2
+        else
+            detect_count=1
+        fi
+        do_boot $detect_count
+        ;;
+    detach | d)
+        echo 'Are you ready to detach the thunderbolt cable? (y/n)'
+        if [[ $(answer) == true ]]; then
+            do_detach
+        fi
+        ;;
+    setup)
+        card=$(lspci | awk 'BEGIN {i=1} /VGA/{print "\033[33m["i"]\033[0m\t"$0; i++}')
+        echo "$card"
+        echo 'Which card is your external GPU?'
+        echo 'Please select highlight number inside bracket.'
+        read -r card_num
+        do_setup "$(echo "$card" | sed -n ${card_num}p)"
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+    esac
+}
+
+main "$@"

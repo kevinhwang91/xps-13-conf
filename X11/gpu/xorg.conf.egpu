@@ -1,0 +1,11 @@
+Section "Module"
+    Load "modesetting"
+EndSection
+
+Section "Device"
+    Identifier  "eGPU"
+    Driver      "@Driver@"
+    BusID       "PCI:@BusID@"
+    Option      "AllowExternalGpus" "True"
+    Option      "AllowEmptyInitialConfiguration"
+EndSection
